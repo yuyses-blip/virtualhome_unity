@@ -45,6 +45,9 @@ public class MotionPlayer : MonoBehaviour
     private bool m_applyRootMotion;
     private bool m_fbbikEnabled;
     private bool m_nmaEnabled;
+    // True once we have saved the original enabled-state and disabled the
+    // conflict sources; makes CaptureAndDisableConflictSources idempotent.
+    private bool m_conflictsCaptured = false;
 
     private List<MotionFrame> m_frames;
     private float m_elapsed;
@@ -93,14 +96,53 @@ public class MotionPlayer : MonoBehaviour
     /// nested List&lt;T&gt; (frames -> bones).</summary>
     public void PlayFromJson(string json)
     {
+        // LoadFrames already caches bones, disables conflict sources, applies
+        // frame 0, and leaves m_state Idle. We only need to flip to Playing so
+        // LateUpdate advances frames. Do NOT call Play() here -- it would call
+        // CaptureAndDisableConflictSources a second time, overwriting the saved
+        // (true) enabled-state with false, so Stop() could never restore.
+        if (LoadFrames(json) > 0)
+        {
+            m_state = PlayState.Playing;
+            Debug.Log("[MotionPlayer] Playing " + m_frames.Count + " frames @ " + frameRate + " fps");
+        }
+    }
+
+    /// <summary>Parse a frame-table JSON and cache the bones + conflict-source
+    /// state, but do NOT start playback. Returns the frame count (0 on parse
+    /// error). Used by the set_body_pose action so the Python side can drive
+    /// frame-by-frame while capture is handled by the native camera_image
+    /// action. After this, call SetPose(i) for each frame index.</summary>
+    public int LoadFrames(string json)
+    {
         FrameList data = JsonConvert.DeserializeObject<FrameList>(json);
         if (data == null || data.frames == null || data.frames.Count == 0)
         {
             Debug.LogError("[MotionPlayer] No frames in payload.");
-            return;
+            m_frames = null;
+            return 0;
         }
         if (data.frameRate > 0f) frameRate = data.frameRate;
-        Play(data.frames);
+        m_frames = data.frames;
+        m_elapsed = 0f;
+        CacheBones();
+        CaptureAndDisableConflictSources();
+        m_state = PlayState.Idle; // stay Idle: LateUpdate won't auto-advance.
+        ApplyAt(0);
+        return m_frames.Count;
+    }
+
+    /// <summary>Apply the pose at frame index i and hold it. Does not capture
+    /// and does not auto-advance; the caller drives frame indices. Leaves
+    /// m_state Idle so LateUpdate stays inert.</summary>
+    public bool SetPose(int frameIndex)
+    {
+        if (m_frames == null || frameIndex < 0 || frameIndex >= m_frames.Count)
+        {
+            return false;
+        }
+        ApplyAt(frameIndex);
+        return true;
     }
 
     public void Play(List<MotionFrame> frames)
@@ -279,6 +321,11 @@ public class MotionPlayer : MonoBehaviour
 
     private void CaptureAndDisableConflictSources()
     {
+        // Idempotent: if we already captured the original enabled-state and
+        // disabled the conflict sources, a second call (e.g. LoadFrames invoked
+        // again with a new frame table) must NOT overwrite the saved state with
+        // the now-false values, or RestoreConflictSources could never re-enable.
+        if (m_conflictsCaptured) return;
         if (m_animator != null)
         {
             m_animatorEnabled = m_animator.enabled;
@@ -297,6 +344,7 @@ public class MotionPlayer : MonoBehaviour
             m_nmaEnabled = m_nma.enabled;
             m_nma.enabled = false;
         }
+        m_conflictsCaptured = true;
     }
 
     private void RestoreConflictSources()
@@ -308,6 +356,7 @@ public class MotionPlayer : MonoBehaviour
         }
         if (m_fbbik != null) m_fbbik.enabled = m_fbbikEnabled;
         if (m_nma != null) m_nma.enabled = m_nmaEnabled;
+        m_conflictsCaptured = false;
     }
 
     void OnDisable()

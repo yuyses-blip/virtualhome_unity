@@ -1361,6 +1361,88 @@ namespace StoryGenerator
                     response.message = "";
                 }
 
+                else if (networkRequest.action == "set_body_pose")
+                {
+                    // Frame-by-frame pose driver for the motion-import PoC.
+                    // intParams: [char_index, frame_index]
+                    // stringParams[0]: frames_json (frame-table JSON). When non-empty
+                    //   the MotionPlayer (re)loads the frame table; when empty it
+                    //   reuses the already-loaded table. This lets the Python side
+                    //   send the full table once (first frame) and just the index
+                    //   afterwards. Capture is NOT done here -- the caller uses the
+                    //   native camera_image action to render each posed frame, which
+                    //   is the proven capture path (see CameraUtils.RenderImage).
+                    if (numCharacters == 0)
+                    {
+                        response.success = false;
+                        response.message = "No character added yet!";
+                    }
+                    else if (networkRequest.intParams == null || networkRequest.intParams.Count < 2)
+                    {
+                        response.success = false;
+                        response.message = "set_body_pose needs intParams [char_index, frame_index]";
+                    }
+                    else
+                    {
+                        int ci = networkRequest.intParams[0];
+                        int frameIndex = networkRequest.intParams[1];
+                        if (ci < 0 || ci >= numCharacters)
+                        {
+                            response.success = false;
+                            response.message = "Invalid char_index " + ci;
+                        }
+                        else
+                        {
+                            GameObject charGo = characters[ci].gameObject;
+                            MotionPlayer mp = charGo.GetComponent<MotionPlayer>();
+                            if (mp == null) mp = charGo.AddComponent<MotionPlayer>();
+
+                            int total = mp.FrameCount;
+                            string framesJson = networkRequest.stringParams != null && networkRequest.stringParams.Count > 0
+                                ? networkRequest.stringParams[0] : "";
+                            if (!string.IsNullOrEmpty(framesJson))
+                            {
+                                try
+                                {
+                                    total = mp.LoadFrames(framesJson);
+                                }
+                                catch (System.Exception e)
+                                {
+                                    response.success = false;
+                                    response.message = "LoadFrames failed: " + e.Message;
+                                    networkRequest = null;
+                                    commServer.UnlockProcessing(response);
+                                    continue;
+                                }
+                                if (total == 0)
+                                {
+                                    response.success = false;
+                                    response.message = "No frames parsed from frames_json.";
+                                    networkRequest = null;
+                                    commServer.UnlockProcessing(response);
+                                    continue;
+                                }
+                            }
+
+                            if (total == 0)
+                            {
+                                response.success = false;
+                                response.message = "No frames loaded; send frames_json first.";
+                            }
+                            else if (!mp.SetPose(frameIndex))
+                            {
+                                response.success = false;
+                                response.message = "frame_index " + frameIndex + " out of range [0," + (total - 1) + "]";
+                            }
+                            else
+                            {
+                                response.success = true;
+                                response.message = JsonConvert.SerializeObject(new { frame_index = frameIndex, frame_count = total });
+                            }
+                        }
+                    }
+                }
+
                 else if (networkRequest.action == "play_body_motion")
                 {
                     if (numCharacters == 0)
