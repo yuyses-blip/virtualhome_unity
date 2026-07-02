@@ -175,7 +175,7 @@ namespace StoryGenerator.SpecialBehavior
                     // the flame starts hidden (power-off). The Toggle below flips its active state
                     // on every SwitchOn/SwitchOff grab.
                     Transform flame = UtilsAnnotator.SpawnPrefab(STR_PATH.GAS_FLAME, tsfm,
-                      coilLocations[j] + new Vector3(0.0f, 0.02f, 0.0f), Vector3.zero, shouldDisabled: true);
+                      coilLocations[j] + new Vector3(0.0f, 0.0f, 0.0f), Vector3.zero, shouldDisabled: true);
                     List<GameObject> list_flame = new List<GameObject>() { flame.gameObject };
 
                     ChangeColor cc1 = new ChangeColor(list_coil, 0.0f, COIL_HEAT_UP, false, Vector4.zero,
