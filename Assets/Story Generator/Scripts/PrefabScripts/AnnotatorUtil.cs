@@ -42,6 +42,7 @@ namespace StoryGenerator.HomeAnnotation
         public const string DESKTOP_LIGHT = "PrefabsForInteractables/Prefabs/DesktopLight";
         public const string TV_SCREEN = "PrefabsForInteractables/Prefabs/TVScreen";
         public const string STOVE_COIL = "PrefabsForInteractables/Prefabs/StoveCoil";
+        public const string GAS_FLAME = "PrefabsForInteractables/Prefabs/GasFlameSmall";
         public const string WATER_STREAM = "PrefabsForInteractables/Prefabs/WaterStream";
         public const string BREAD = "ExtraObjects/Bread_slice_1/Bread_slice_1";
         public const string SPRITE_COMP_SCREEN = "PrefabsForInteractables/Textures/laptop";
