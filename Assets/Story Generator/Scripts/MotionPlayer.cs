@@ -39,12 +39,16 @@ public class MotionPlayer : MonoBehaviour
     private Animator m_animator;
     private FullBodyBipedIK m_fbbik;
     private NavMeshAgent m_nma;
+    private Rigidbody m_rb;
 
     // Saved state to restore after playback.
     private bool m_animatorEnabled;
     private bool m_applyRootMotion;
     private bool m_fbbikEnabled;
     private bool m_nmaEnabled;
+    private bool m_nmaUpdatePosition;
+    private bool m_nmaUpdateRotation;
+    private bool m_rbIsKinematic;
     // True once we have saved the original enabled-state and disabled the
     // conflict sources; makes CaptureAndDisableConflictSources idempotent.
     private bool m_conflictsCaptured = false;
@@ -55,6 +59,14 @@ public class MotionPlayer : MonoBehaviour
     // When true, PlayAndCapture owns frame advance and LateUpdate stays idle
     // so the two paths don't fight over bone writes / m_elapsed.
     private bool m_capturing = false;
+    // Last root pose written by SetPose/ApplyAt. While m_holdRoot is true,
+    // LateUpdate re-writes this every frame so any system that snaps the
+    // character back to its spawn point (NavMesh, physics, placement scripts)
+    // between HTTP requests cannot win. Set when frames are loaded; cleared by
+    // Stop() so the character is fully released afterwards.
+    private bool m_holdRoot = false;
+    private Vector3 m_lastRootPos = Vector3.zero;
+    private Quaternion m_lastRootRot = Quaternion.identity;
 
     // Cache bone transforms by name once.
     private Dictionary<string, Transform> m_boneCache = new Dictionary<string, Transform>();
@@ -89,6 +101,7 @@ public class MotionPlayer : MonoBehaviour
         m_animator = GetComponent<Animator>();
         m_fbbik = GetComponent<FullBodyBipedIK>();
         m_nma = GetComponent<NavMeshAgent>();
+        m_rb = GetComponent<Rigidbody>();
     }
 
     /// <summary>Load frames from a JSON string and begin playback.
@@ -128,6 +141,7 @@ public class MotionPlayer : MonoBehaviour
         CacheBones();
         CaptureAndDisableConflictSources();
         m_state = PlayState.Idle; // stay Idle: LateUpdate won't auto-advance.
+        m_holdRoot = true;        // LateUpdate re-asserts root pose each frame.
         ApplyAt(0);
         return m_frames.Count;
     }
@@ -159,6 +173,7 @@ public class MotionPlayer : MonoBehaviour
     public void Stop()
     {
         m_state = PlayState.Idle;
+        m_holdRoot = false; // release the character; other systems may move it again.
         m_frames = null;
         RestoreConflictSources();
     }
@@ -257,6 +272,22 @@ public class MotionPlayer : MonoBehaviour
 
     void LateUpdate()
     {
+        // When driving frame-by-frame from the Python side (set_body_pose), the
+        // caller owns frame advance and m_state stays Idle. Re-assert the last
+        // root pose here every frame so nothing (NavMesh/physics/placement)
+        // can move the character between HTTP requests. Bones are not re-touched:
+        // the Animator/IK are disabled, so the poses written by SetPose persist.
+        if (m_holdRoot && !m_capturing)
+        {
+            transform.position = m_lastRootPos;
+            transform.rotation = m_lastRootRot;
+            if (m_rb != null)
+            {
+                m_rb.position = m_lastRootPos;
+                m_rb.rotation = m_lastRootRot;
+            }
+        }
+
         if (m_state != PlayState.Playing || m_frames == null || m_capturing) return;
 
         m_elapsed += Time.deltaTime;
@@ -285,11 +316,19 @@ public class MotionPlayer : MonoBehaviour
         // Root.
         if (f.rootPosition != null && f.rootPosition.Length == 3)
         {
-            transform.position = new Vector3(f.rootPosition[0], f.rootPosition[1], f.rootPosition[2]);
+            Vector3 p = new Vector3(f.rootPosition[0], f.rootPosition[1], f.rootPosition[2]);
+            transform.position = p;
+            m_lastRootPos = p;
+            // Keep the Rigidbody in sync so the physics engine does not snap the
+            // transform back next FixedUpdate (m_rb is kinematic while driving).
+            if (m_rb != null) m_rb.position = p;
         }
         if (f.rootRotation != null && f.rootRotation.Length == 4)
         {
-            transform.rotation = new Quaternion(f.rootRotation[0], f.rootRotation[1], f.rootRotation[2], f.rootRotation[3]);
+            Quaternion q = new Quaternion(f.rootRotation[0], f.rootRotation[1], f.rootRotation[2], f.rootRotation[3]);
+            transform.rotation = q;
+            m_lastRootRot = q;
+            if (m_rb != null) m_rb.rotation = q;
         }
 
         // Bones.
@@ -342,7 +381,26 @@ public class MotionPlayer : MonoBehaviour
         if (m_nma != null)
         {
             m_nmaEnabled = m_nma.enabled;
+            // Besides disabling, stop the agent from writing transform back to
+            // its NavMesh position/rotation each frame (updatePosition/updateRotation
+            // run even while pathing is idle) and drop any in-flight path.
+            m_nmaUpdatePosition = m_nma.updatePosition;
+            m_nmaUpdateRotation = m_nma.updateRotation;
+            m_nma.updatePosition = false;
+            m_nma.updateRotation = false;
+            m_nma.ResetPath();
             m_nma.enabled = false;
+        }
+        if (m_rb != null)
+        {
+            // The character has a dynamic Rigidbody (only rotation is frozen).
+            // A non-kinematic Rigidbody is reintegrated by the physics engine
+            // every FixedUpdate and would snap the transform back, undoing our
+            // transform.position writes. Make it kinematic so we own the pose.
+            m_rbIsKinematic = m_rb.isKinematic;
+            m_rb.isKinematic = true;
+            m_rb.velocity = Vector3.zero;
+            m_rb.angularVelocity = Vector3.zero;
         }
         m_conflictsCaptured = true;
     }
@@ -355,7 +413,13 @@ public class MotionPlayer : MonoBehaviour
             m_animator.applyRootMotion = m_applyRootMotion;
         }
         if (m_fbbik != null) m_fbbik.enabled = m_fbbikEnabled;
-        if (m_nma != null) m_nma.enabled = m_nmaEnabled;
+        if (m_nma != null)
+        {
+            m_nma.enabled = m_nmaEnabled;
+            m_nma.updatePosition = m_nmaUpdatePosition;
+            m_nma.updateRotation = m_nmaUpdateRotation;
+        }
+        if (m_rb != null) m_rb.isKinematic = m_rbIsKinematic;
         m_conflictsCaptured = false;
     }
 
