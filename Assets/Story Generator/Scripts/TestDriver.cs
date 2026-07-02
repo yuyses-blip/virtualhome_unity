@@ -1355,13 +1355,74 @@ namespace StoryGenerator
 
                 }
 
-                else if (networkRequest.action == "idle") 
+                else if (networkRequest.action == "idle")
                 {
                     response.success = true;
                     response.message = "";
-                } 
-                
-                else 
+                }
+
+                else if (networkRequest.action == "play_body_motion")
+                {
+                    if (numCharacters == 0)
+                    {
+                        response.success = false;
+                        response.message = "No character added yet!";
+                    }
+                    else
+                    {
+                        BodyMotionConfig bmConfig = JsonConvert.DeserializeObject<BodyMotionConfig>(networkRequest.stringParams[0]);
+                        int ci = bmConfig.char_index;
+                        if (ci < 0 || ci >= numCharacters)
+                        {
+                            response.success = false;
+                            response.message = "Invalid char_index " + ci;
+                        }
+                        else
+                        {
+                            GameObject charGo = characters[ci].gameObject;
+                            MotionPlayer mp = charGo.GetComponent<MotionPlayer>();
+                            if (mp == null) mp = charGo.AddComponent<MotionPlayer>();
+                            mp.frameRate = bmConfig.frame_rate > 0f ? bmConfig.frame_rate : mp.frameRate;
+
+                            try
+                            {
+                                mp.PlayFromJson(bmConfig.frames_json);
+                            }
+                            catch (System.Exception e)
+                            {
+                                response.success = false;
+                                response.message = "PlayFromJson failed: " + e.Message;
+                                networkRequest = null;
+                                commServer.UnlockProcessing(response);
+                                continue;
+                            }
+
+                            if (mp.FrameCount == 0)
+                            {
+                                response.success = false;
+                                response.message = "No frames parsed from frames_json.";
+                                networkRequest = null;
+                                commServer.UnlockProcessing(response);
+                                continue;
+                            }
+
+                            int total = mp.FrameCount;
+
+                            // Capture frames (blocking coroutine).
+                            yield return StartCoroutine(mp.PlayAndCapture(
+                                bmConfig.output_folder, cameras, bmConfig.camera_indexes,
+                                bmConfig.image_width, bmConfig.image_height));
+
+                            int captured = mp.LastCapturedCount;
+                            mp.Stop();
+
+                            response.success = true;
+                            response.message = JsonConvert.SerializeObject(new { frames_captured = captured, frame_count = total });
+                        }
+                    }
+                }
+
+                else
                 {
                     response.success = false;
                     response.message = "Unknown action " + networkRequest.action;
@@ -1921,6 +1982,22 @@ namespace StoryGenerator
         public Vector3 character_position = new Vector3(0.0f, 0.0f, 0.0f);
         public string initial_room = "livingroom";
         public string mode = "random";
+    }
+
+    // Feasibility-study config: drive a character from an external motion
+    // frame stream (SMPL-X converted to per-bone local rotations on the Python
+    // side). The frames payload is a MotionPlayer.FrameList JSON.
+    public class BodyMotionConfig
+    {
+        public int char_index = 0;
+        public float frame_rate = 30f;
+        public string output_folder = "";
+        public int image_width = 480;
+        public int image_height = 270;
+        public List<int> camera_indexes = new List<int>();
+        // framesJson is the MotionPlayer.FrameList JSON (kept separate so the
+        // config itself stays small and readable).
+        public string frames_json = "";
     }
 
     public class ExecutionConfig : RecorderConfig
