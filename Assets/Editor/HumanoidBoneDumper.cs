@@ -35,11 +35,27 @@ public static class HumanoidBoneDumper
         }
 
         Animator animator = selected.GetComponentInChildren<Animator>();
-        if (animator == null || !animator.isHuman)
+        if (animator == null)
         {
-            Debug.LogError("[BoneDumper] Selected object has no Humanoid Animator.");
+            Debug.LogError("[BoneDumper] Selected '" + selected.name + "' has no Animator at all.");
             return;
         }
+        if (!animator.isHuman)
+        {
+            // List all Animators found so the user can pick the right one.
+            Animator[] all = selected.GetComponentsInChildren<Animator>(true);
+            string summary = "";
+            foreach (var a in all)
+                summary += "\n  - " + a.gameObject.name + " (isHuman=" + a.isHuman
+                           + ", avatar=" + (a.avatar != null ? a.avatar.name : "null") + ")";
+            Debug.LogError("[BoneDumper] Animator on '" + animator.gameObject.name
+                           + "' is NOT Humanoid. All Animators under '" + selected.name + "':" + summary
+                           + "\nSelect the GameObject whose Animator isHuman=true and re-run.");
+            return;
+        }
+        Debug.Log("[BoneDumper] Using Humanoid Animator on '" + animator.gameObject.name
+                  + "' (avatar=" + (animator.avatar != null ? animator.avatar.name : "null")
+                  + "), selected='" + selected.name + "'");
 
         // Enumerate every HumanBodyBones value (0 .. LastBone-1).
         Array boneEnums = Enum.GetValues(typeof(HumanBodyBones));
@@ -50,6 +66,14 @@ public static class HumanoidBoneDumper
             Transform t = animator.GetBoneTransform(hb);
             if (t != null) boneMap[hb] = t;
         }
+        if (boneMap.Count == 0)
+        {
+            Debug.LogError("[BoneDumper] Animator isHuman=true but GetBoneTransform returned null for EVERY bone. "
+                           + "The avatar's bone mapping is broken or this is a Generic avatar mislabeled. "
+                           + "Check the Animator's Avatar field and re-import the fbx as Humanoid.");
+            return;
+        }
+        Debug.Log("[BoneDumper] Mapped " + boneMap.Count + " bones.");
 
         // Build a reverse lookup: Transform -> HumanBodyBones, to find parents.
         Dictionary<Transform, HumanBodyBones> transformToBone = new Dictionary<Transform, HumanBodyBones>();
