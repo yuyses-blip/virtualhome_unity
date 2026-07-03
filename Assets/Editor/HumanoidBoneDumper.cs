@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text;
 using UnityEngine;
 using UnityEditor;
 
@@ -82,7 +83,6 @@ public static class HumanoidBoneDumper
             if (!transformToBone.ContainsKey(kv.Value)) transformToBone[kv.Value] = kv.Key;
         }
 
-        List<object> entries = new List<object>();
         Debug.Log("[BoneDumper] === Humanoid bone dump for " + selected.name + " ===");
         foreach (var kv in boneMap)
         {
@@ -101,17 +101,6 @@ public static class HumanoidBoneDumper
                 t.localRotation.x, t.localRotation.y, t.localRotation.z, t.localRotation.w,
                 t.position.x, t.position.y, t.position.z);
             Debug.Log("[BoneDumper] " + line);
-
-            entries.Add(new
-            {
-                bone = hb.ToString(),
-                transformName = t.name,
-                parent = parentBone.ToString(),
-                localPosition = new float[] { t.localPosition.x, t.localPosition.y, t.localPosition.z },
-                localRotation = new float[] { t.localRotation.x, t.localRotation.y, t.localRotation.z, t.localRotation.w },
-                worldPosition = new float[] { t.position.x, t.position.y, t.position.z },
-                worldRotation = new float[] { t.rotation.x, t.rotation.y, t.rotation.z, t.rotation.w },
-            });
         }
 
         // Root (Hips) world transform is needed for coordinate alignment on the Python side.
@@ -129,13 +118,48 @@ public static class HumanoidBoneDumper
             };
         }
 
-        object payload = new { character = selected.name, root = rootInfo, bones = entries };
-
         string dir = "Assets/StreamingAssets";
         if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
         string path = Path.Combine(dir, "humanoid_bone_dump.json");
-        File.WriteAllText(path, JsonUtility.ToJson(payload, true));
-        Debug.Log("[BoneDumper] Wrote " + entries.Count + " bones to " + path);
+        // Hand-roll JSON: JsonUtility cannot serialize anonymous objects, and we
+        // avoid depending on Newtonsoft in the Editor assembly. The structure is flat.
+        StringBuilder sb = new StringBuilder();
+        sb.Append("{\n  \"character\": \"").Append(selected.name).Append("\",\n");
+        sb.Append("  \"root\": ");
+        if (rootInfo != null && hips != null)
+        {
+            sb.Append("{\n    \"name\": \"").Append(hips.name).Append("\",\n");
+            sb.Append("    \"worldPosition\": [").Append(hips.position.x).Append(",").Append(hips.position.y).Append(",").Append(hips.position.z).Append("],\n");
+            sb.Append("    \"worldRotation\": [").Append(hips.rotation.x).Append(",").Append(hips.rotation.y).Append(",").Append(hips.rotation.z).Append(",").Append(hips.rotation.w).Append("],\n");
+            sb.Append("    \"rootWorldPosition\": [").Append(selected.transform.position.x).Append(",").Append(selected.transform.position.y).Append(",").Append(selected.transform.position.z).Append("],\n");
+            sb.Append("    \"rootWorldRotation\": [").Append(selected.transform.rotation.x).Append(",").Append(selected.transform.rotation.y).Append(",").Append(selected.transform.rotation.z).Append(",").Append(selected.transform.rotation.w).Append("]\n  },\n");
+        }
+        else sb.Append("null,\n");
+        sb.Append("  \"bones\": [\n");
+        // Build bones JSON directly from boneMap.
+        int idx = 0;
+        foreach (var kv in boneMap)
+        {
+            HumanBodyBones hb = kv.Key;
+            Transform t = kv.Value;
+            HumanBodyBones parentBone = HumanBodyBones.LastBone;
+            if (t.parent != null && transformToBone.TryGetValue(t.parent, out HumanBodyBones pb)) parentBone = pb;
+            sb.Append("    {\n");
+            sb.Append("      \"bone\": \"").Append(hb.ToString()).Append("\",\n");
+            sb.Append("      \"transformName\": \"").Append(t.name).Append("\",\n");
+            sb.Append("      \"parent\": \"").Append(parentBone.ToString()).Append("\",\n");
+            sb.Append("      \"localPosition\": [").Append(t.localPosition.x).Append(",").Append(t.localPosition.y).Append(",").Append(t.localPosition.z).Append("],\n");
+            sb.Append("      \"localRotation\": [").Append(t.localRotation.x).Append(",").Append(t.localRotation.y).Append(",").Append(t.localRotation.z).Append(",").Append(t.localRotation.w).Append("],\n");
+            sb.Append("      \"worldPosition\": [").Append(t.position.x).Append(",").Append(t.position.y).Append(",").Append(t.position.z).Append("],\n");
+            sb.Append("      \"worldRotation\": [").Append(t.rotation.x).Append(",").Append(t.rotation.y).Append(",").Append(t.rotation.z).Append(",").Append(t.rotation.w).Append("]\n");
+            sb.Append("    }");
+            if (idx < boneMap.Count - 1) sb.Append(",");
+            sb.Append("\n");
+            idx++;
+        }
+        sb.Append("  ]\n}\n");
+        File.WriteAllText(path, sb.ToString());
+        Debug.Log("[BoneDumper] Wrote " + boneMap.Count + " bones to " + path);
         AssetDatabase.Refresh();
     }
 }
